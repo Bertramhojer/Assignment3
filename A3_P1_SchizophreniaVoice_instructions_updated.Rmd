@@ -1,10 +1,10 @@
 ---
 title: "Assignment 3 - Part 1 - Voice In Schizophrenia"
-author: "Riccardo Fusaroli"
-date: "August 09, 2019"
+author: "Bertram Hojer"
+date: "October 23, 2019"
 output: html_document
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
@@ -113,10 +113,10 @@ See placeholder code here for help.
 #install.packages("DescTools")
 #install.packages("goeveg")
 #install.packages("tidymodels")
-library(tidyverse, tidymodels)
+library(tidyverse, tidymodels, lmerTest)
 library(goeveg)
 library(DescTools)
-
+?cohen.d
 
 # Define function read_pitch()
 read_pitch <- function(filename) {
@@ -142,7 +142,6 @@ read_pitch <- function(filename) {
     
     return(data)
 }
-
 
 # test it on just one file while writing the function
 test_data = read_pitch()
@@ -195,6 +194,7 @@ dataDur <- dataDur %>%
 
 # Finally the pitch data
 dataPitch <- read.csv("~/Dropbox/R/Class/Assignment3/pitch_data.csv")
+median(dataPitch$median)
 dataPitch <- dataPitch %>% 
     filter(study == 1 | study == 2 | study == 3 | study == 4)
 
@@ -225,11 +225,7 @@ I like to use group_by() %>% summarize() for quick summaries
 ```{r}
 head(data)
 
-# filter out all data from study three as it lacks the importants measures
-#data <- data %>% 
- #   filter(data$study != 3)
-
-# merging by diagnosis
+# Descriptive statistics for diagnosis vs no-diagnosis
 data %>% 
     filter(trial == 1) %>% 
     group_by(diagnosis) %>% 
@@ -239,20 +235,32 @@ data %>%
               age = mean(Age, na.rm = T),
               Negative_symptoms = mean(SANS, na.rm = T),
               Positive_symptoms = mean(SAPS, na.rm = T),
-              IQ = mean(TotalIQ, na.rm = T))
+              IQ = mean(TotalIQ, na.rm = T),
+              meanPitch = mean(mean, na.rm = T),
+              sdPitch = mean(sd, na.rm = T),
+              phonationTime = mean(phonationtime..s., na.rm = T),
+              syllablesPrSec = mean(speechrate..nsyll.dur., na.rm = T),
+              articulationRate = mean(articulation.rate..nsyll...phonationtime., na.rm = T)
+    )
 
-# merging by study
+# Descriptive statistics by study
 data %>% 
     filter(trial == 1) %>% 
-    group_by(study) %>% 
+    group_by(study, diagnosis) %>% 
     summarize(participants = n(),
               male = sum(Gender=="M", na.rm = T),
               female = sum(Gender=="F", na.rm = T),
               age = mean(Age, na.rm = T),
+              meanPitch = mean(mean, na.rm = T),
               Negative_symptoms = mean(SANS, na.rm = T),
               Positive_symptoms = mean(SAPS, na.rm = T),
-              IQ = mean(TotalIQ, na.rm = T))
-
+              IQ = mean(TotalIQ, na.rm = T),
+              sdPitch = mean(sd, na.rm = T),
+              phonationTime = mean(phonationtime..s., na.rm = T),
+              syllablesPrSec = mean(speechrate..nsyll.dur., na.rm = T),
+              articulationRate = mean(articulation.rate..nsyll...phonationtime., na.rm = T)
+    )
+              
 ```
 
 ## Now we can analyze the data
@@ -273,6 +281,51 @@ N.N.N.B. If you want to estimate the studies separately, you can try this syntax
 - Bonus points: cross-validate the models and report the betas and standard errors from all rounds to get an idea of how robust the estimates are. 
 
 ```{r}
+set.seed(1)
+
+# changing any datapoints in the 'number of pauses' variable as these will produce data-points of value 'Inf (infinity)' as we're then dividing by 0. This will prove a problem for modeling. Therefore the data-points with value 0 are changed to NA.
+data$npause[data$npause==0] <- NA
+
+data = data %>% group_by(study) %>% mutate(pitchScaled = scale(mean), #mean of pitch
+                                           # average syllables pr. sec
+                                           speechrateScaled = scale(speechrate..nsyll.dur.),
+                                           # duration of recording with speech present
+                                           phonationtimeScaled = scale(phonationtime..s.),
+                                           # syllables said pr. spoken second
+                                           articulationrateScaled = scale(articulation.rate..nsyll...phonationtime.),
+                                           # The proportion of spoken time throughout the recording
+                                           propSpeakingTimeScaled = scale((phonationtime..s./dur..s.)),
+                                           # pause duration - (duration minus spoken time) / n() pauses
+                                           pauseDurationScaled = scale((dur..s. - phonationtime..s.) / npause)
+                                           )
+
+
+# defining models
+# Testing pitch variablity by diagnosis
+modelPitch <- lmer(pitchScaled ~ diagnosis + (1 | uID), data)
+summary(modelPitch)
+cohen.d(data$pitchScaled, data$diagnosis, na.rm=T, pooled=T, hedges=T)
+
+
+# Testing speech-rate by diagnosis
+modelSpeechrate <- lmer(speechrateScaled ~ diagnosis + (1 | uID), data)
+summary(modelSpeechrate)
+cohen.d(data$speechrateScaled, data$diagnosis, na.rm=T, pooled=T, hedges=T)
+
+# Testing proportion of spoken time by diagnosis
+modelSpokentime <- lmer(propSpeakingTimeScaled ~ diagnosis + (1 | uID), data)
+summary(modelSpokentime)
+cohen.d(data$propSpeakingTimeScaled, data$diagnosis, na.rm=T, pooled=T, hedges=T)
+
+# Testing pause-duration against diagnosis
+modelPauseDuration <- lmer(pauseDuration ~ diagnosis + (1 | uID), data)
+summary(modelPauseDuration)
+cohen.d(data$pauseDurationScaled, data$diagnosis, na.rm=T, pooled=T, hedges=T)
+
+
+
+
+
    set.seed(1)
    x <- runif(7)
 
