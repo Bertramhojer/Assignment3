@@ -113,7 +113,7 @@ See placeholder code here for help.
 #install.packages("DescTools")
 #install.packages("goeveg")
 #install.packages("tidymodels")
-library(tidyverse, tidymodels, lmerTest)
+library(tidyverse, tidymodels)
 library(goeveg)
 library(DescTools)
 ?cohen.d
@@ -169,7 +169,7 @@ dataDemo <- dataDemo %>%
         subj = Participant,
         study = Study,
         diagnosis = Diagnosis,
-        )
+        ) # renaming column-names
 
 dataDemo$diagnosis <- as.character(dataDemo$diagnosis)
 dataDemo$diagnosis[dataDemo$diagnosis=="Control"] <-  "0"
@@ -180,7 +180,7 @@ dataDemo$diagnosis <- as.factor(dataDemo$diagnosis)
 # then duration data
 dataDur <- read.csv("~/Dropbox/R/Class/Assignment3/data/articulation.txt")
 
-
+# extracting relevant data from filename and extracting numbers
 dataDur$study <- dataDur$soundname %>% str_extract("Study\\d") %>% str_extract("\\d")
 dataDur$diagnosis <- dataDur$soundname %>% str_extract("D\\d") %>% str_extract("\\d")
 dataDur$subj <- dataDur$soundname %>% str_extract("S\\d++") %>% str_extract("\\d+")
@@ -194,21 +194,20 @@ dataDur <- dataDur %>%
 
 # Finally the pitch data
 dataPitch <- read.csv("~/Dropbox/R/Class/Assignment3/pitch_data.csv")
-median(dataPitch$median)
 dataPitch <- dataPitch %>% 
-    filter(study == 1 | study == 2 | study == 3 | study == 4)
+    filter(study == 1 | study == 2 | study == 3 | study == 4) # filter only danish studies
 
 
-# Now we merge them
+# Now we merge them by their uniquely valid columns
 data <- merge(dataDemo, dataPitch, by = c("subj", "study", "diagnosis"), all = T)
 data <- merge(data, dataDur, by = c("subj", "study", "trial", "diagnosis"), all = T)
 
 
 # Creating unique and pair IDs
-data = data %>% mutate(uPairID = paste(subj, study, sep = "_"),
-                 uPairID = as.numeric(as.factor(uPairID)),
-                 uID = paste(subj, study, diagnosis, sep = "_"),
-                 uID = as.numeric(as.factor(uID)))
+data = data %>% mutate(uPairID = paste(subj, study, sep = "_"), # creating pairID from subj & study
+                 uPairID = as.numeric(as.factor(uPairID)), # numeric to remove unncessary information
+                 uID = paste(subj, study, diagnosis, sep = "_"), # creating ID from subj, study and diag
+                 uID = as.numeric(as.factor(uID))) # numeric to remove unnecessary information
 
 # Now we save them
 write_csv(data, "dataMerged.csv")
@@ -225,7 +224,7 @@ I like to use group_by() %>% summarize() for quick summaries
 ```{r}
 head(data)
 
-# Descriptive statistics for diagnosis vs no-diagnosis
+# Descriptive statistics diagnosis vs no-diagnosis
 data %>% 
     filter(trial == 1) %>% 
     group_by(diagnosis) %>% 
@@ -292,7 +291,7 @@ data = data %>% group_by(study) %>% mutate(pitchScaled = scale(mean), #mean of p
                                            # duration of recording with speech present
                                            phonationtimeScaled = scale(phonationtime..s.),
                                            # syllables said pr. spoken second
-                                           articulationrateScaled = scale(articulation.rate..nsyll...phonationtime.),
+                                           articulationrateScaled =    scale(articulation.rate..nsyll...phonationtime.),
                                            # The proportion of spoken time throughout the recording
                                            propSpeakingTimeScaled = scale((phonationtime..s./dur..s.)),
                                            # pause duration - (duration minus spoken time) / n() pauses
@@ -305,7 +304,6 @@ data = data %>% group_by(study) %>% mutate(pitchScaled = scale(mean), #mean of p
 modelPitch <- lmer(pitchScaled ~ diagnosis + (1 | uID), data)
 summary(modelPitch)
 cohen.d(data$pitchScaled, data$diagnosis, na.rm=T, pooled=T, hedges=T)
-
 
 # Testing speech-rate by diagnosis
 modelSpeechrate <- lmer(speechrateScaled ~ diagnosis + (1 | uID), data)
@@ -322,10 +320,10 @@ modelPauseDuration <- lmer(pauseDuration ~ diagnosis + (1 | uID), data)
 summary(modelPauseDuration)
 cohen.d(data$pauseDurationScaled, data$diagnosis, na.rm=T, pooled=T, hedges=T)
 
+# Writing a data-file to be accessed in part two
+write_csv(data, "dataPart2.csv")
 
-
-
-
+# What is this?
    set.seed(1)
    x <- runif(7)
 
@@ -345,9 +343,16 @@ Part 1 - Can we find a difference in acoustic features in schizophrenia?
 1) Describe your sample 
 number of studies, number of participants, age, gender, clinical and cognitive features of the two groups. Furthemore, critically assess whether the groups (schizophrenia and controls) are balanced. N.B. you need to take studies into account.
 
+* In our case we decided to only use the danish studies to make the analysis less complex and to make it more comparable between studies. There are many confounds between running the studies in different countries and different cultural factors that might play in. 
+Overall for all danish studies we can report 119 controls (male = 69, female = 49) and 104 diagnosed patients (male = 60, female = 44). As seen here the distribution of the genders is slightly skewed with more men participating in the studies.
+The average age for control vs. patients is 26.6 and 26.8 respectively, we expect this since the patients were matched to controls.
+We furtermore see that there's a huge difference in negative symptoms shown between groups (controls = 0.42, patients = 9.64), in positive symptoms (controls = 0.08, patients = 10.32), in IQ-score (controls = 103, patients = 87.5).
+
 
 2) Describe the acoustic profile of a schizophrenic voice: which features are different?
 E.g. People with schizophrenia tend to have high-pitched voice, and present bigger swings in their prosody than controls. N.B. look also at effect sizes. How do these findings relate to the meta-analytic findings?
+
+* As to the autistic profile of patients vs. controls none of the hypothesis that we have seem to hold up. We have an expectation that the mean-pitch should be higher for patients, this however doesn't seem to be the case (mean pitch  = (controls = 160.48, patients = 151.66)). We furthermore had an expectation that patients would vary more in pitch, this also wasn't the case (controls SD = , 34.36 patients SD = 21.16). This doesn't go very well in line with the meta-analysis that found significant differences in pitch-variability and deviation in prosody in the opposite direction.
 
 3) Discuss the analysis necessary to replicate the meta-analytic findings
 Look at the results reported in the paper (see meta-analysis in the readings) and see whether they are similar to those you get.
