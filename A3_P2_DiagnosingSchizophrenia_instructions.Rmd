@@ -1,0 +1,371 @@
+---
+title: "Assignment 3 - Part 2 - Diagnosing Schizophrenia from Voice"
+author: "Bertram Hojer"
+date: "October 24, 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Assignment 3 - Part 2 - Diagnosing schizophrenia from voice
+
+In the previous part of the assignment you generated a bunch of "features", that is, of quantitative descriptors of voice in schizophrenia. We then looked at whether we could replicate results from the previous literature.
+We now want to know whether we can automatically diagnose schizophrenia from voice only, that is, relying on the set of features you produced last time, we will try to produce an automated classifier.
+Again, remember that the dataset containst 7 studies and 3 languages. Feel free to only include Danish (Study 1-4) if you feel that adds too much complexity.
+
+Issues to be discussed your report:
+- Should you run the analysis on all languages/studies at the same time? 
+- Choose your best acoustic feature from part 1. How well can you diagnose schizophrenia just using it?
+- Identify the best combination of acoustic features to diagnose schizophrenia using logistic regression.
+- Discuss the "classification" process: which methods are you using? Which confounds should you be aware of? What are the strength and limitation of the analysis?
+- Bonus question: Logistic regression is only one of many classification algorithms. Try using others and compare performance. Some examples: Discriminant Function, Random Forest, Support Vector Machine, etc. The package caret provides them. 
+- Bonus Bonus question: It is possible combine the output of multiple  classification models to improve classification accuracy. For inspiration see,
+https://machinelearningmastery.com/machine-learning-ensembles-with-r/
+ The interested reader might also want to look up 'The BigChaos Solution to the Netflix Grand Prize'
+
+## Learning objectives
+- Learn the basics of classification in a machine learning framework
+- Design, fit and report logistic regressions
+- Apply feature selection techniques
+
+### Let's start
+
+We first want to build a logistic regression to see whether you can diagnose schizophrenia from your best acoustic feature. Let's use the full dataset and calculate the different performance measures (accuracy, sensitivity, specificity, PPV, NPV, ROC curve). You need to think carefully as to how we should (or not) use study and subject ID.
+
+Then cross-validate the logistic regression and re-calculate performance on the testing folds. N.B. The cross-validation functions you already have should be tweaked: you need to calculate these new performance measures. Alternatively, the groupdata2 and cvms package created by Ludvig are an easy solution. 
+
+N.B. the predict() function generates log odds (the full scale between minus and plus infinity). Log odds > 0 indicates a choice of 1, below a choice of 0.
+N.N.B. you need to decide whether calculate performance on each single test fold or save all the prediction for test folds in one datase, so to calculate overall performance.
+N.N.N.B. Now you have two levels of structure: subject and study. Should this impact your cross-validation?
+N.N.N.N.B. A more advanced solution could rely on the tidymodels set of packages (warning: Time-consuming to learn as the documentation is sparse, but totally worth it)
+
+
+### Using Tidymodels ###
+
+
+# Loading packages
+```{r}
+pacman::p_load(pacman, tidyverse, tidymodels, groupdata2, kernlab)
+```
+
+
+# Loading data
+```{r}
+# reading data-set
+data <- read.csv("dataPart2.csv", header = T)
+
+data$diagnosis <- as.factor(data$diagnosis)
+
+# examining the data-set
+data %>% head(5) %>% knitr::kable()
+
+
+# loading grouped data
+groupedData <- read.csv("groupedData.csv", header = T)
+groupedData$diagnosis <- as.factor(groupedData$diagnosis)
+
+
+# creating dataframes including relevant variables
+dataIQR <- data %>% 
+  select(study, trial, subj, uID, uPairID, diagnosis, IQR) %>% drop_na()
+
+dataPause <- data %>% 
+  select(study, trial, subj, uID, uPairID, diagnosis, pauseDuration) %>% drop_na()
+
+dataSpeechrate <- data %>% 
+  select(study, trial, subj, uID, uPairID, diagnosis, speechrate..nsyll.dur.) %>% drop_na()
+
+dataSpokentime <- data %>% 
+  select(study, trial, subj, uID, uPairID, diagnosis, propSpeakingTime) %>% drop_na()
+
+dataCombined <- data %>% 
+  select(study, trial, subj, uID, uPairID, diagnosis, IQR, pauseDuration, 
+         speechrate..nsyll.dur., propSpeakingTime) %>% drop_na()
+
+dataSd <- data %>% 
+  select(study, trial, subj, uID, uPairID, diagnosis, sd) %>% drop_na()
+
+```
+
+
+
+# Defining models with grouped data (1 data point pr. participant instead of approx. 10)
+```{r}
+# creating dataframes including relevant variables
+groupedDataIQR <- groupedData %>% 
+  select(uID, diagnosis, IQR) %>% drop_na() # Pitch variablity model
+
+groupedDataPause <- groupedData %>% 
+  select(uID, diagnosis, pauseDuration) %>% drop_na() # Pause duration model
+
+groupedDataSpeechrate <- groupedData %>% 
+  select(uID, diagnosis, speechrate) %>% drop_na() # Speech rate model
+
+groupedDataSpokentime <- groupedData %>% 
+  select(uID, diagnosis, propSpokenTime) %>% drop_na() # Proportional of spoken time model
+
+groupedDataSD <-  groupedData %>% 
+  select(uID, diagnosis, sd) %>% drop_na() # Standard deviation model
+
+groupedDataCombined <- groupedData %>% 
+  select(uID, diagnosis, IQR, pauseDuration, 
+         speechrate, propSpokenTime) %>% drop_na() # The combined model
+
+```
+
+
+
+# Running models & cross-validation
+```{r}
+# partitioning the data using groupdata2
+df_list <- partition(groupedDataCombined, p = 0.2, cat_col = c("diagnosis"), id_col = c("uID"), list_out = T)
+
+# defining the test-set and removing ID-column
+#groupedPred <- df_list[[1]]
+
+df_test <- df_list[[1]]
+df_test <- df_test %>% 
+  select(-uID)
+
+# defining the train-set and removing ID-column
+df_train <- df_list[[2]]
+df_train <- df_train %>% 
+  select(-uID)
+
+
+
+# Defining the recipe for train-data
+# We've removed NAs so no need to check for missing values
+rec <- df_train %>% recipe(diagnosis ~ .) %>% # defines outcome of pre-processing
+  step_center(all_numeric()) %>% # centering all numeric values
+  step_scale(all_numeric()) %>% # scaling all numeric values
+  step_corr(all_numeric()) %>% 
+  prep(training = df_train) # defining the train-set
+
+# extracting 'df_train' from rec_train (the recipe)
+train_baked <- juice(rec)
+test_baked <- rec %>% bake(df_test)
+
+
+# defining model as logistic regression
+log_fit <- 
+  logistic_reg() %>% 
+  set_mode("classification") %>% 
+  set_engine("glm") %>% 
+  fit(diagnosis ~ ., data = train_baked)
+
+# defining model as a support-vector-machine
+svm_fit <- 
+  svm_rbf() %>% 
+  set_mode("classification") %>% 
+  set_engine("kernlab") %>%
+  fit(diagnosis ~ ., data = train_baked)
+
+
+
+# investigating both logistic regression and the SVM-models
+# get multiple at once
+test_results <- 
+  test_baked %>% 
+  select(diagnosis) %>% 
+  mutate(
+    log_class = predict(log_fit, new_data = test_baked) %>% 
+      pull(.pred_class),
+    log_prob  = predict(log_fit, new_data = test_baked, type = "prob") %>% 
+      pull(.pred_1),
+    svm_class = predict(svm_fit, new_data = test_baked) %>% 
+      pull(.pred_class),
+    svm_prob  = predict(svm_fit, new_data = test_baked, type = "prob") %>% 
+      pull(.pred_1)
+  )
+
+
+#  Investigating the metrics
+metrics(test_results, truth = diagnosis, estimate = log_class) %>% 
+  knitr::kable()
+
+# extracting metrics of log_class
+test_results %>%
+  select(diagnosis, log_class, log_prob) %>%
+  knitr::kable()
+
+# Plotting area-under-the-curve (ROC-curve)
+test_results %>%
+  roc_curve(truth = diagnosis, log_prob) %>% 
+  autoplot()
+
+
+# Cross validation of grouped data
+cv_folds <- vfold_cv(df_train, v = 10, repeats = 10, strata = diagnosis, group = uID)
+
+#prepare data set and fetch train data
+cv_folds <- cv_folds %>% 
+  mutate(recipes = splits %>%
+           # prepper is a wrapper for `prep()` which handles `split` objects
+           map(prepper, recipe = rec),
+         train_data = splits %>% map(training))
+
+# train model of each fold
+  # create a non-fitted model
+log_fit <- 
+  logistic_reg() %>%
+  set_mode("classification") %>% 
+  set_engine("glm")
+
+cv_folds <- cv_folds %>%  mutate(
+  log_fits = pmap(list(recipes, train_data), #input 
+                            ~ fit(log_fit, formula(.x), data = bake(object = .x, new_data = .y)) # function to apply
+                 ))
+
+predict_log <- function(split, rec, model) {
+  # IN
+    # split: a split data
+    # rec: recipe to prepare the data
+    # 
+  # OUT
+    # a tibble of the actual and predicted results
+  baked_test <- bake(rec, testing(split))
+  tibble(
+    actual = baked_test$diagnosis,
+    predicted = predict(model, new_data = baked_test) %>% pull(.pred_class),
+    prop_sui =  predict(model, new_data = baked_test, type = "prob") %>% pull(.pred_1),
+    prop_non_sui =  predict(model, new_data = baked_test, type = "prob") %>% pull(`.pred_0`)
+  ) 
+}
+
+# apply our function to each split, which their respective recipes and models (in this case log fits) and save it to a new col
+cv_folds <- cv_folds %>% 
+  mutate(pred = pmap(list(splits, recipes, log_fits) , predict_log))
+
+
+eval <- cv_folds %>% 
+  mutate(
+    metrics = pmap(list(pred), ~ metrics(., truth = actual, estimate = predicted, prop_sui))) %>% 
+  select(id, id2, metrics) %>% 
+  unnest(metrics)
+
+#inspect performance metrics
+eval %>% 
+  select(repeat_n = id, fold_n = id2, metric = .metric, estimate = .estimate) %>% 
+  spread(metric, estimate) %>% 
+  head() %>% 
+  knitr::kable()
+```
+
+
+
+
+# Making a combined prediction from multiple models
+```{r}
+dataList = list(groupedDataIQR, groupedDataPause, groupedDataSD,
+            groupedDataSpeechrate, groupedDataSpokentime, groupedDataCombined)
+
+for (df in dataList){
+  df_list <- partition(df, p = 0.2, cat_col = c("diagnosis"), list_out = T)
+  
+  # define test-set
+  df_test <- df_list[[1]]
+  df_test <- df_test %>% 
+  select(-uID)
+
+  # define train-set
+  df_train <- df_list[[2]]
+  df_train <- df_train %>% 
+  select(-uID)
+  
+  # Defining the recipe for train-data
+  # We've removed NAs so no need to check for missing values
+  rec <- df_train %>% recipe(diagnosis ~ .) %>% # defines outcome of pre-processing
+    step_center(all_numeric()) %>% # centering all numeric values
+    step_scale(all_numeric()) %>% # scaling all numeric values
+    step_corr(all_numeric()) %>% 
+    prep(training = df_train) # defining the train-set
+
+  # extracting 'df_train' from rec_train (the recipe)
+  train_baked <- juice(rec)
+  test_baked <- rec %>% bake(df_test)
+
+
+  # defining model as logistic regression
+  log_fit <- 
+    logistic_reg() %>% 
+    set_mode("classification") %>% 
+    set_engine("glm") %>% 
+    fit(diagnosis ~ ., data = train_baked)
+  
+  # defining model as a support-vector-machine
+  svm_fit <- 
+    svm_rbf() %>% 
+    set_mode("classification") %>% 
+    set_engine("kernlab") %>%
+    fit(diagnosis ~ ., data = train_baked)
+  
+  # getting test-results
+  test_results <- test_baked %>% 
+    select(diagnosis) %>% 
+    mutate(
+      log_class = predict(log_fit, new_data = test_baked) %>% 
+        pull(.pred_class),
+      log_prob  = predict(log_fit, new_data = test_baked, type = "prob") %>% 
+        pull(.pred_1),
+      svm_class = predict(svm_fit, new_data = test_baked) %>% 
+        pull(.pred_class),
+      svm_prob  = predict(svm_fit, new_data = test_baked, type = "prob") %>% 
+        pull(.pred_1)
+    )
+  
+    #  Investigating the metrics
+  metrics(test_results, truth = diagnosis, estimate = log_class) %>% 
+    knitr::kable()
+  
+  # extracting metrics of log_class
+  test_results <- test_results %>%
+    select(diagnosis, log_class, log_prob) %>% 
+    mutate(log_prob = log_prob-0.5,
+           diagnosis = as.numeric(diagnosis)-1,
+           log_class = as.numeric(log_class)-1) 
+  
+  if (NROW(allPredictions) < 1)  {
+        allPredictions <- test_results
+  } else {
+    allPredictions <- cbind(allPredictions, test_results)
+  }
+}
+
+allPredictions <- data.frame()
+
+
+
+absmax <- function(x) {x[which.max ( abs(x) )]}
+
+  
+for (i in 1:44){
+  ulala[i] <- absmax(allPredictions[i, c(3, 6, 9, 12, 15, 18)])
+}
+
+ulala <- unlist(transpose(ulala))
+
+sumLogProb = allPredictions[,3]+allPredictions[,6]+allPredictions[,9]+allPredictions[,12]+allPredictions[,15]+allPredictions[,18]
+
+final <- allPredictions[,2]*(allPredictions[,3]/sumLogProb)+allPredictions[,5]*(allPredictions[,6]/sumLogProb)+allPredictions[,8]*(allPredictions[,9]/sumLogProb)+allPredictions[,11]*(allPredictions[,12]/sumLogProb)+allPredictions[,14]*(allPredictions[,15]/sumLogProb)+allPredictions[,17]*(allPredictions[,18]/sumLogProb)
+
+predData <- data.frame(predictions=final, actual=allPredictions[,1])
+predData$predDiagnosis <- ifelse(predData$predictions < 0.5, "0", "1")
+predData$predDiagnosis <- as.factor(predData$predDiagnosis)
+predData$actual <- as.factor(predData$actual)
+
+caret::confusionMatrix(predData$predDiagnosis, predData$actual, positive="0")
+
+
+predData2 <- data.frame(predictions=ulala, actual=allPredictions[,1])
+predData2$predDiagnosis <- ifelse(predData2$predictions < 0, "0", "1")
+predData2$predDiagnosis <- as.factor(predData2$predDiagnosis)
+predData2$actual <- as.factor(predData2$actual)
+
+caret::confusionMatrix(predData2$predDiagnosis, predData2$actual, positive="0")
+```
+
